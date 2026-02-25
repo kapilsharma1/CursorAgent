@@ -8,7 +8,7 @@ import shutil
 import logging
 from pathlib import Path
 
-from backend.config import get_settings
+from config import get_settings
 
 logger = logging.getLogger(__name__)
 
@@ -42,7 +42,9 @@ async def clone_repo(repo_url: str, dest_path: Path) -> None:
     - Enforces max repo size (10MB) after clone
     - Uses shallow clone (depth 1)
     """
+    logger.info("clone_repo start url=%s dest=%s", repo_url, dest_path)
     if not is_github_public_url(repo_url):
+        logger.warning("clone_repo invalid URL: %s", repo_url)
         raise ValueError("Only public GitHub repo URLs are supported")
 
     settings = get_settings()
@@ -50,9 +52,11 @@ async def clone_repo(repo_url: str, dest_path: Path) -> None:
     dest_path.parent.mkdir(parents=True, exist_ok=True)
 
     if dest_path.exists():
+        logger.debug("clone_repo removing existing dest %s", dest_path)
         shutil.rmtree(dest_path)
 
     url = normalize_github_url(repo_url)
+    logger.debug("clone_repo running git clone %s -> %s", url, dest_path)
     proc = await asyncio.create_subprocess_exec(
         "git",
         "clone",
@@ -67,6 +71,7 @@ async def clone_repo(repo_url: str, dest_path: Path) -> None:
     stdout, stderr = await proc.communicate()
     if proc.returncode != 0:
         err = (stderr or stdout or b"").decode().strip()
+        logger.error("clone_repo git failed returncode=%s stderr=%s", proc.returncode, err[:500])
         raise RuntimeError(f"git clone failed: {err}")
 
     # Enforce total repo size cap
@@ -78,8 +83,9 @@ async def clone_repo(repo_url: str, dest_path: Path) -> None:
             except OSError:
                 pass
             if total > settings.max_repo_bytes:
+                logger.warning("clone_repo size exceeded limit total=%s max=%s", total, settings.max_repo_bytes)
                 shutil.rmtree(dest_path, ignore_errors=True)
                 raise ValueError(
                     f"Repo exceeds max size ({settings.max_repo_bytes} bytes). Aborted."
                 )
-    logger.info("Cloned repo into %s (total bytes %s)", dest_path, total)
+    logger.info("clone_repo success dest=%s total_bytes=%s", dest_path, total)

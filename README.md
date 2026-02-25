@@ -61,7 +61,7 @@ A production-quality MVP that implements a Cursor-style AI coding assistant: clo
 cd backend
 pip install -r requirements.txt
 # Set env (see below)
-uvicorn backend.main:app --reload --host 0.0.0.0 --port 8000
+uvicorn main:app --reload --host 0.0.0.0 --port 8000
 ```
 
 ### Frontend
@@ -79,16 +79,18 @@ Open the app (e.g. http://localhost:5173). Use the API proxy: in `vite.config.ts
 Create `backend/.env`:
 
 ```env
-OPENAI_API_KEY=sk-...
-PINECONE_API_KEY=...
-PINECONE_INDEX_NAME=cursor-clone-index
+OPENAI_API_KEY=''
+PINECONE_API_KEY=''
+PINECONE_INDEX_NAME=''
 # Optional:
 OPENAI_BASE_URL=https://...
 WORKSPACE_ROOT=./workspace
 MAX_REPO_BYTES=10485760
 MAX_FILE_BYTES=512000
-MAX_FILES_IN_PATCH=5
-MAX_PATCH_LINES=500
+MAX_FILES_IN_PATCH=10
+MAX_PATCH_LINES=2000
+# Logging: DEBUG, INFO, WARNING, ERROR (default: INFO)
+LOG_LEVEL=INFO
 ```
 
 Create a Pinecone index with dimension matching your embedding model (e.g. **1536** for `text-embedding-3-small`). The app uses **namespaces** per session; one index is enough.
@@ -99,9 +101,16 @@ Optional: `frontend/.env`:
 
 ```env
 VITE_API_URL=http://localhost:8000
+# Set to 'true' or '1' for verbose console logs (e.g. in production build)
+VITE_DEBUG=false
 ```
 
 If not set, the app uses `/api` (relative), which works with the Vite proxy.
+
+### Logging (debugging)
+
+- **Backend**: Logging is configured in `log_config.py` and used across all modules. Set `LOG_LEVEL=DEBUG` in `backend/.env` for verbose logs (default: `INFO`). Each request is logged (method, path, status); clone, index, agent stream, and apply-patch are logged with session IDs and outcomes.
+- **Frontend**: A small logger in `src/lib/logger.ts` writes to the browser console with a `[CursorClone]` prefix. In development, `info`/`debug` are enabled; in production they are off unless you set `VITE_DEBUG=true` in `frontend/.env`. Errors and warnings are always logged.
 
 ---
 

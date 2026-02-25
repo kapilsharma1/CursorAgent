@@ -5,7 +5,11 @@ Application configuration loaded from environment variables.
 from pathlib import Path
 from typing import List
 
+from pydantic import model_validator
 from pydantic_settings import BaseSettings
+
+# Backend package directory (where config.py lives). Used to resolve relative workspace_root.
+_BACKEND_DIR = Path(__file__).resolve().parent
 
 
 class Settings(BaseSettings):
@@ -20,7 +24,10 @@ class Settings(BaseSettings):
     pinecone_index_name: str = "cursor-clone-index"
     pinecone_env: str | None = None  # For serverless, e.g. us-east-1
 
-    # Workspace
+    # Tavily (web search)
+    tavily_api_key: str = ""
+
+    # Workspace (relative paths are resolved against the backend directory so clone and apply-patch use the same path)
     workspace_root: Path = Path("./workspace")
 
     # Safety limits
@@ -41,10 +48,20 @@ class Settings(BaseSettings):
     embedding_model: str = "text-embedding-3-small"
     embedding_dimensions: int = 1536  # Match model
 
+    # Logging (DEBUG, INFO, WARNING, ERROR)
+    log_level: str = "INFO"
+
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"
         extra = "ignore"
+
+    @model_validator(mode="after")
+    def resolve_workspace_root(self) -> "Settings":
+        """Resolve relative workspace_root to an absolute path so it does not depend on process cwd."""
+        if not self.workspace_root.is_absolute():
+            self.workspace_root = (_BACKEND_DIR / self.workspace_root).resolve()
+        return self
 
     def repo_path(self, session_id: str) -> Path:
         """Path to cloned repo for a session."""

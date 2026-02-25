@@ -59,6 +59,7 @@ class RunAgentRequest(BaseModel):
 
     session_id: str
     message: str
+    search_mode: bool = False
 
 
 # --- Streaming event types (emitted by graph) ---
@@ -103,7 +104,7 @@ class AgentState(BaseModel):
     """Global state for the LangGraph agent; all nodes read/write this."""
 
     user_input: str = ""
-    intent: Literal["chat", "generate", "debug"] = "chat"
+    intent: Literal["chat", "generate", "debug", "search"] = "chat"
     retrieved_chunks: list[dict[str, Any]] = Field(default_factory=list)
     plan: list[str] = Field(default_factory=list)
     diff: Optional[str] = None

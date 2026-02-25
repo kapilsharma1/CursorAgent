@@ -6,9 +6,10 @@ interface CodeEditorProps {
   sessionId: string | null;
   filePath: string | null;
   references: { file: string; line: number }[];
+  refreshKey?: number;
 }
 
-export default function CodeEditor({ sessionId, filePath, references }: CodeEditorProps) {
+export default function CodeEditor({ sessionId, filePath, references, refreshKey = 0 }: CodeEditorProps) {
   const [content, setContent] = useState('');
   const [loading, setLoading] = useState(false);
   const editorRef = useRef<Parameters<NonNullable<Parameters<typeof Editor>[0]['onMount']>>[0] | null>(null);
@@ -24,7 +25,7 @@ export default function CodeEditor({ sessionId, filePath, references }: CodeEdit
       .then((data) => setContent(data.content))
       .catch(() => setContent(''))
       .finally(() => setLoading(false));
-  }, [sessionId, filePath]);
+  }, [sessionId, filePath, refreshKey]);
 
   // Apply line highlights when references or file change; run after content is loaded so editor is ready
   useEffect(() => {

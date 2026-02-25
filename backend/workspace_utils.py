@@ -6,7 +6,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from backend.config import get_settings
+from config import get_settings
 
 logger = logging.getLogger(__name__)
 
@@ -33,15 +33,21 @@ def resolve_file_path(session_id: str, path: str) -> Path | None:
     """
     repo_root = get_repo_root(session_id)
     if not repo_root.exists():
+        logger.debug("resolve_file_path repo_root missing session_id=%s", session_id)
         return None
     # Normalize: no leading slash, no ..
     clean = path.strip().lstrip("/").replace("\\", "/")
     if ".." in clean or clean.startswith("/"):
+        logger.debug("resolve_file_path rejected path=%s session_id=%s", path, session_id)
         return None
     resolved = (repo_root / clean).resolve()
     if not is_safe_path(resolved, repo_root):
+        logger.debug("resolve_file_path unsafe path=%s session_id=%s", path, session_id)
         return None
-    return resolved if resolved.is_file() else None
+    out = resolved if resolved.is_file() else None
+    if not out:
+        logger.debug("resolve_file_path not a file path=%s session_id=%s", path, session_id)
+    return out
 
 
 def build_file_tree(repo_root: Path) -> list[dict[str, Any]]:
@@ -87,6 +93,7 @@ def build_file_tree(repo_root: Path) -> list[dict[str, Any]]:
                 add_node(parent_list, child_rel, name, False)
 
     walk(repo_root, Path(""), tree)
+    logger.debug("build_file_tree repo_root=%s entries=%s", repo_root, len(tree))
     return tree
 
 
@@ -95,12 +102,16 @@ def read_file_content(file_path: Path, max_bytes: int | None = None) -> str | No
     settings = get_settings()
     limit = max_bytes or settings.max_file_bytes
     try:
-        if file_path.stat().st_size > limit:
+        size = file_path.stat().st_size
+        if size > limit:
+            logger.debug("read_file_content skipped (too large) path=%s size=%s limit=%s", file_path, size, limit)
             return None
         raw = file_path.read_bytes()
         # Simple binary check: null byte or high proportion of non-text
         if b"\x00" in raw:
+            logger.debug("read_file_content skipped (binary) path=%s", file_path)
             return None
         return raw.decode("utf-8", errors="replace")
-    except (OSError, UnicodeDecodeError):
+    except (OSError, UnicodeDecodeError) as e:
+        logger.debug("read_file_content failed path=%s: %s", file_path, e)
         return None

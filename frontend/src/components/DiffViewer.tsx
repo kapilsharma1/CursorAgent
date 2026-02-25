@@ -1,11 +1,12 @@
 import { useState } from 'react';
 import { applyPatch } from '../api/agent';
+import { logger } from '../lib/logger';
 
 interface DiffViewerProps {
   diff: string;
   sessionId: string | null;
   onClose: () => void;
-  onApplied: () => void;
+  onApplied: (updatedFiles?: Record<string, string>) => void;
 }
 
 export default function DiffViewer({ diff, sessionId, onClose, onApplied }: DiffViewerProps) {
@@ -16,15 +17,19 @@ export default function DiffViewer({ diff, sessionId, onClose, onApplied }: Diff
     if (!sessionId) return;
     setLoading(true);
     setError(null);
+    logger.info('Diff', 'apply patch', { sessionId, diffLen: diff.length });
     try {
       const res = await applyPatch(sessionId, diff);
       if (res.success) {
-        onApplied();
+        logger.info('Diff', 'patch applied', { sessionId, files: res.updated_files && Object.keys(res.updated_files) });
+        onApplied(res.updated_files);
         onClose();
       } else {
+        logger.warn('Diff', 'patch apply failed', { sessionId, error: res.error ?? res.message });
         setError(res.error ?? res.message);
       }
     } catch (e) {
+      logger.error('Diff', 'patch apply error', { sessionId, error: (e as Error).message });
       setError((e as Error).message);
     } finally {
       setLoading(false);

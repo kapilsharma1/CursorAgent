@@ -53,14 +53,17 @@ def validate_diff(diff: str, repo_root: Path) -> tuple[bool, str]:
     Deterministic validation: format, path safety, file count, line count.
     Returns (ok, error_message).
     """
-    from backend.config import get_settings
+    from config import get_settings
+    logger.debug("validate_diff repo_root=%s diff_len=%s", repo_root, len(diff or ""))
     settings = get_settings()
     max_files = settings.max_files_in_patch
     max_lines = settings.max_patch_lines
     if not diff or not diff.strip():
+        logger.debug("validate_diff rejected: empty diff")
         return False, "Empty diff"
     parsed = parse_unified_diff(diff)
     if not parsed:
+        logger.debug("validate_diff rejected: invalid format")
         return False, "Invalid unified diff format"
     if len(parsed) > max_files:
         return False, f"Too many files (max {max_files})"
@@ -89,7 +92,9 @@ def validate_diff(diff: str, repo_root: Path) -> tuple[bool, str]:
             if hunk.startswith("+") or hunk.startswith("-"):
                 total_lines += 1
     if total_lines > max_lines:
+        logger.debug("validate_diff rejected: too many lines total=%s max=%s", total_lines, max_lines)
         return False, f"Too many lines changed (max {max_lines})"
+    logger.debug("validate_diff ok files=%s", len(parsed))
     return True, ""
 
 
@@ -99,6 +104,9 @@ def _apply_hunk_to_lines(lines: list[str], hunk: Any) -> list[str]:
     start = getattr(hunk, "source_start", 1) - 1
     start = max(0, start)
     source_len = getattr(hunk, "source_length", 0)
+    # Short form @@ -1 +1 @@ can leave source_length 0; treat as 1 line so we replace instead of insert
+    if source_len <= 0:
+        source_len = 1
     end = min(start + source_len, len(lines))
     # Result of hunk: context and added lines (no removed)
     new_block: list[str] = []
@@ -117,6 +125,7 @@ def apply_patch(diff: str, repo_root: Path) -> dict[str, str] | str:
     Apply unified diff to repo. Must call validate_diff first.
     Returns dict path -> new_content for changed files, or error message string.
     """
+    logger.debug("apply_patch start repo_root=%s", repo_root)
     ok, err = validate_diff(diff, repo_root)
     if not ok:
         return err
@@ -124,10 +133,12 @@ def apply_patch(diff: str, repo_root: Path) -> dict[str, str] | str:
         from unidiff import PatchSet
         from io import StringIO
     except ImportError:
+        logger.error("apply_patch unidiff not installed")
         return "unidiff not installed"
     try:
         patch = PatchSet(StringIO(diff))
     except Exception as e:
+        logger.warning("apply_patch parse failed: %s", e)
         return f"Invalid diff: {e}"
     repo_root = repo_root.resolve()
     updated: dict[str, str] = {}
@@ -155,4 +166,5 @@ def apply_patch(diff: str, repo_root: Path) -> dict[str, str] | str:
         full = repo_root / path
         full.parent.mkdir(parents=True, exist_ok=True)
         full.write_text(content, encoding="utf-8")
+    logger.info("apply_patch success repo_root=%s updated=%s", repo_root, list(updated.keys()))
     return updated

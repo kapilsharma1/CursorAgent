@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import type { TreeEntry } from '../api/agent';
 import { cloneRepo } from '../api/agent';
+import { logger } from '../lib/logger';
 
 interface RepoLoaderProps {
   onLoaded: (sessionId: string, tree: TreeEntry[]) => void;
@@ -16,10 +17,13 @@ export default function RepoLoader({ onLoaded }: RepoLoaderProps) {
     if (!url.trim()) return;
     setLoading(true);
     setError(null);
+    logger.info('Repo', 'clone submit', { url: url.trim() });
     try {
       const data = await cloneRepo(url.trim());
+      logger.info('Repo', 'clone success', { sessionId: data.session_id });
       onLoaded(data.session_id, data.tree);
     } catch (e) {
+      logger.error('Repo', 'clone failed', { url: url.trim(), error: (e as Error).message });
       setError((e as Error).message);
     } finally {
       setLoading(false);

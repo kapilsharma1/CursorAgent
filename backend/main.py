@@ -11,11 +11,11 @@ from fastapi import BackgroundTasks, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 
-from backend.config import get_settings
-from backend.github import clone_repo
-from backend.graph import get_graph
-from backend.indexer import embed_and_index
-from backend.models import (
+from config import get_settings
+from github import clone_repo
+from graph import get_graph
+from indexer import embed_and_index
+from models import (
     ApplyPatchRequest,
     ApplyPatchResponse,
     CloneRepoRequest,
@@ -24,11 +24,12 @@ from backend.models import (
     RepoTreeResponse,
     RunAgentRequest,
 )
-from backend.workspace_utils import build_file_tree, get_repo_root, read_file_content, resolve_file_path
-from backend.diff_utils import validate_diff
-from backend.diff_utils import apply_patch as apply_patch_impl
+from workspace_utils import build_file_tree, get_repo_root, read_file_content, resolve_file_path
+from diff_utils import validate_diff
+from diff_utils import apply_patch as apply_patch_impl
+from log_config import configure_logging
 
-logging.basicConfig(level=logging.INFO)
+configure_logging()
 logger = logging.getLogger(__name__)
 
 
@@ -37,7 +38,9 @@ async def lifespan(app: FastAPI):
     """Startup: ensure workspace exists. Shutdown: nothing."""
     settings = get_settings()
     settings.workspace_root.mkdir(parents=True, exist_ok=True)
+    logger.info("Lifespan startup: workspace_root=%s", settings.workspace_root)
     yield
+    logger.info("Lifespan shutdown")
 
 
 app = FastAPI(
@@ -54,56 +57,88 @@ app.add_middleware(
 )
 
 
+@app.middleware("http")
+async def log_requests(request, call_next):
+    """Log every request and response status for debugging."""
+    logger.info("Request started %s %s", request.method, request.url.path)
+    try:
+        response = await call_next(request)
+        logger.info("Request finished %s %s -> %s", request.method, request.url.path, response.status_code)
+        return response
+    except Exception as e:
+        logger.exception("Request failed %s %s: %s", request.method, request.url.path, e)
+        raise
+
+
 @app.get("/health")
 async def health():
     """Health check."""
+    logger.debug("GET /health")
     return {"status": "ok"}
 
 
 def run_indexing(session_id: str) -> None:
     """Run indexing in background (sync; call from thread or run_in_executor)."""
+    repo_root = get_repo_root(session_id)
+    logger.info(
+        "[reindex] run_indexing ENTRY session_id=%s repo_root=%s exists=%s",
+        session_id, repo_root, repo_root.exists(),
+    )
     try:
         embed_and_index(session_id)
+        logger.info("[reindex] run_indexing DONE session_id=%s", session_id)
     except Exception as e:
-        logger.exception("Indexing failed for %s: %s", session_id, e)
+        logger.exception("[reindex] run_indexing FAILED session_id=%s: %s", session_id, e)
 
 
 @app.post("/clone-repo", response_model=CloneRepoResponse)
 async def post_clone_repo(body: CloneRepoRequest, background_tasks: BackgroundTasks):
     """Clone public GitHub repo; return session_id and file tree. Start indexing in background."""
     session_id = str(uuid.uuid4())
+    logger.info("POST /clone-repo repo_url=%s -> session_id=%s", body.repo_url, session_id)
     settings = get_settings()
     repo_path = settings.repo_path(session_id)
     try:
         await clone_repo(body.repo_url, repo_path)
     except ValueError as e:
+        logger.warning("Clone validation failed repo_url=%s: %s", body.repo_url, e)
         raise HTTPException(status_code=400, detail=str(e))
     except RuntimeError as e:
+        logger.error("Clone runtime error repo_url=%s: %s", body.repo_url, e)
         raise HTTPException(status_code=502, detail=str(e))
     tree = build_file_tree(repo_path)
+    logger.debug("Clone tree built entries=%s", len(tree))
     background_tasks.add_task(lambda: run_indexing(session_id))
+    logger.info("POST /clone-repo success session_id=%s", session_id)
     return CloneRepoResponse(session_id=session_id, tree=tree)
 
 
 @app.get("/repo-tree", response_model=RepoTreeResponse)
 async def get_repo_tree(session_id: str):
     """Return file tree for the cloned repo."""
+    logger.debug("GET /repo-tree session_id=%s", session_id)
     repo_root = get_repo_root(session_id)
     if not repo_root.exists():
+        logger.warning("GET /repo-tree repo not found session_id=%s", session_id)
         raise HTTPException(status_code=404, detail="Repo not found for this session.")
     tree = build_file_tree(repo_root)
+    logger.debug("GET /repo-tree success session_id=%s entries=%s", session_id, len(tree))
     return RepoTreeResponse(tree=tree)
 
 
 @app.get("/file", response_model=FileContentResponse)
 async def get_file(session_id: str, path: str):
     """Return file content. Path relative to repo root; no traversal."""
+    logger.debug("GET /file session_id=%s path=%s", session_id, path)
     resolved = resolve_file_path(session_id, path)
     if not resolved:
+        logger.warning("GET /file not found session_id=%s path=%s", session_id, path)
         raise HTTPException(status_code=404, detail="File not found or access denied.")
     content = read_file_content(resolved)
     if content is None:
+        logger.warning("GET /file unreadable (large/binary) session_id=%s path=%s", session_id, path)
         raise HTTPException(status_code=400, detail="File too large or binary.")
+    logger.debug("GET /file success session_id=%s path=%s len=%s", session_id, path, len(content))
     return FileContentResponse(path=path, content=content)
 
 
@@ -112,11 +147,12 @@ async def run_agent_stream(body: RunAgentRequest):
     """Run LangGraph agent; stream structured SSE events (status, agent_step, retrieval, diff, final)."""
     session_id = body.session_id
     message = body.message or ""
+    logger.info("POST /run-agent/stream session_id=%s message_len=%s", session_id, len(message))
     graph = get_graph()
     initial_state = {
         "user_input": message,
         "session_id": session_id,
-        "intent": "chat",
+        "intent": "search" if body.search_mode else "chat",
         "retrieved_chunks": [],
         "plan": [],
         "diff": None,
@@ -136,14 +172,19 @@ async def run_agent_stream(body: RunAgentRequest):
     async def event_generator():
         sent_count = 0
         try:
+            if body.search_mode:
+                yield f"data: {json.dumps({'type': 'status', 'message': 'Searching the web…'})}\n\n"
             async for event in graph.astream(initial_state, stream_mode="updates"):
-                for _node_name, update in event.items():
+                for node_name, update in event.items():
                     events = update.get("stream_events") or []
                     for i in range(sent_count, len(events)):
                         yield f"data: {json.dumps(events[i])}\n\n"
+                    if events:
+                        logger.debug("Agent node=%s emitted %s new events", node_name, len(events) - sent_count)
                     sent_count = len(events)
+            logger.info("POST /run-agent/stream completed session_id=%s total_events=%s", session_id, sent_count)
         except Exception as e:
-            logger.exception("Agent stream error: %s", e)
+            logger.exception("Agent stream error session_id=%s: %s", session_id, e)
             yield f"data: {json.dumps({'type': 'status', 'message': str(e)})}\n\n"
 
     return StreamingResponse(
@@ -155,24 +196,34 @@ async def run_agent_stream(body: RunAgentRequest):
 
 @app.post("/apply-patch", response_model=ApplyPatchResponse)
 async def apply_patch(body: ApplyPatchRequest):
-    """Validate and optionally apply patch. Safe-by-default; dry_run only validates."""
+    """Validate and optionally apply patch. Safe-by-default; dry_run only validates. Re-indexes after apply (same thread) so chat sees updated content."""
     session_id = body.session_id
     diff = body.diff or ""
     dry_run = body.dry_run
+    logger.info("POST /apply-patch session_id=%s dry_run=%s diff_len=%s", session_id, dry_run, len(diff))
     repo_root = get_repo_root(session_id)
     if not repo_root.exists():
+        logger.warning("POST /apply-patch repo not found session_id=%s", session_id)
         return ApplyPatchResponse(success=False, message="Repo not found.", error="Repo not found for session.")
     ok, err = validate_diff(diff, repo_root)
     if not ok:
+        logger.warning("POST /apply-patch validation failed session_id=%s: %s", session_id, err)
         return ApplyPatchResponse(success=False, message="Validation failed.", error=err)
     if dry_run:
+        logger.info("POST /apply-patch dry_run valid session_id=%s", session_id)
         return ApplyPatchResponse(success=True, message="Diff is valid (dry run).")
     result = apply_patch_impl(diff, repo_root)
     if isinstance(result, str):
+        logger.error("POST /apply-patch apply failed session_id=%s: %s", session_id, result)
         return ApplyPatchResponse(success=False, message="Apply failed.", error=result)
+    logger.info(
+        "POST /apply-patch success session_id=%s updated_files=%s; re-indexing in same thread",
+        session_id, list(result.keys()),
+    )
+    run_indexing(session_id)
     return ApplyPatchResponse(success=True, message="Patch applied.", updated_files=result)
 
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("backend.main:app", host="0.0.0.0", port=8000, reload=True)
+    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)

@@ -8,8 +8,8 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-from backend.config import get_settings
-from backend.workspace_utils import get_repo_root, read_file_content
+from config import get_settings
+from workspace_utils import get_repo_root, read_file_content
 
 logger = logging.getLogger(__name__)
 
@@ -42,7 +42,9 @@ def walk_and_collect(session_id: str) -> list[tuple[Path, str]]:
     """
     settings = get_settings()
     repo_root = get_repo_root(session_id)
+    logger.debug("walk_and_collect session_id=%s repo_root=%s", session_id, repo_root)
     if not repo_root.exists():
+        logger.warning("walk_and_collect repo_root does not exist session_id=%s", session_id)
         return []
     extensions = set(settings.index_extensions)
     ignore_dirs = set(settings.ignore_dirs)
@@ -61,6 +63,7 @@ def walk_and_collect(session_id: str) -> list[tuple[Path, str]]:
                 continue
             total_bytes += path.stat().st_size
             collected.append((path, content))
+    logger.debug("walk_and_collect session_id=%s files=%s total_bytes=%s", session_id, len(collected), total_bytes)
     return collected
 
 
@@ -131,35 +134,58 @@ def embed_and_index(session_id: str) -> None:
     Uses sync OpenAI client and Pinecone; run in background task or thread.
     """
     from openai import OpenAI
-    from pinecone import Pinecone, ServerlessSpec
-
-    settings = get_settings()
-    if not settings.pinecone_api_key or not settings.openai_api_key:
-        logger.warning("Missing PINECONE_API_KEY or OPENAI_API_KEY; skipping index.")
-        return
+    from pinecone import Pinecone
 
     repo_root = get_repo_root(session_id)
+    logger.info(
+        "[reindex] embed_and_index START session_id=%s repo_root=%s exists=%s",
+        session_id, repo_root, repo_root.exists(),
+    )
+    settings = get_settings()
+    if not settings.pinecone_api_key or not settings.openai_api_key:
+        logger.warning("[reindex] embed_and_index SKIP missing PINECONE_API_KEY or OPENAI_API_KEY")
+        return
+
     file_contents = walk_and_collect(session_id)
+    file_paths = [str(p.relative_to(repo_root)) for p, _ in file_contents]
+    logger.info(
+        "[reindex] embed_and_index walk_and_collect session_id=%s files=%s paths=%s",
+        session_id, len(file_contents), file_paths[:15],
+    )
     all_chunks: list[dict[str, Any]] = []
     for path, content in file_contents:
         all_chunks.extend(chunk_by_structure(path, content, repo_root))
 
     if not all_chunks:
-        logger.info("No chunks to index for session %s", session_id)
+        logger.warning("[reindex] embed_and_index no chunks session_id=%s (files=%s)", session_id, len(file_contents))
         return
+    logger.info("[reindex] embed_and_index chunking done session_id=%s chunks=%s", session_id, len(all_chunks))
 
-    openai_client = OpenAI(
-        api_key=settings.openai_api_key,
-        base_url=settings.openai_base_url,
-    )
+    openai_kwargs: dict = {"api_key": settings.openai_api_key}
+    if settings.openai_base_url and settings.openai_base_url.strip():
+        openai_kwargs["base_url"] = settings.openai_base_url.strip()
+    openai_client = OpenAI(**openai_kwargs)
     texts = [c["content"] for c in all_chunks]
+    logger.info("[reindex] embed_and_index calling embeddings model=%s texts=%s", settings.embedding_model, len(texts))
     embeddings = get_embeddings(openai_client, texts, settings.embedding_model)
+    logger.info("[reindex] embed_and_index embeddings done session_id=%s vectors=%s", session_id, len(embeddings))
 
     pc = Pinecone(api_key=settings.pinecone_api_key)
     index = pc.Index(settings.pinecone_index_name)
-
-    # Pinecone metadata has size limits; store content in metadata if small enough, else we store id and can look up
     namespace = session_id
+    # Clear namespace so this upsert replaces old content (required for re-index). Serverless only; pod indexes may raise.
+    try:
+        index.delete_namespace(namespace=namespace)
+        logger.info("[reindex] embed_and_index deleted namespace=%s so new content replaces old", namespace)
+    except Exception as e:
+        err_msg = str(e).lower()
+        if "404" in err_msg or "namespace not found" in err_msg:
+            logger.debug("[reindex] embed_and_index delete_namespace %s (namespace did not exist)", namespace)
+        else:
+            logger.warning(
+                "[reindex] embed_and_index delete_namespace failed namespace=%s (index may be pod-based; old vectors will remain): %s",
+                namespace, e,
+            )
     vectors = []
     for i, (chunk, vec) in enumerate(zip(all_chunks, embeddings)):
         chunk_id = str(uuid.uuid4())
@@ -175,8 +201,13 @@ def embed_and_index(session_id: str) -> None:
         vectors.append({"id": chunk_id, "values": vec, "metadata": meta})
         if len(vectors) >= 100:
             index.upsert(vectors=vectors, namespace=namespace)
+            logger.info("[reindex] embed_and_index upserted batch 100 namespace=%s", namespace)
             vectors = []
 
     if vectors:
         index.upsert(vectors=vectors, namespace=namespace)
-    logger.info("Indexed %s chunks for session %s", len(all_chunks), session_id)
+        logger.info("[reindex] embed_and_index upserted final batch namespace=%s len=%s", namespace, len(vectors))
+    logger.info(
+        "[reindex] embed_and_index DONE session_id=%s namespace=%s total_chunks=%s",
+        session_id, namespace, len(all_chunks),
+    )
