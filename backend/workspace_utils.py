@@ -1,8 +1,10 @@
 """
-Workspace helpers: build file tree, resolve safe file paths, read file content.
+Workspace helpers: build file tree, resolve safe file paths, read file content, session meta.
 """
 
+import json
 import logging
+import re
 from pathlib import Path
 from typing import Any
 
@@ -10,10 +12,52 @@ from config import get_settings
 
 logger = logging.getLogger(__name__)
 
+# Valid git branch name: alphanumeric, -, _; no .. or leading dot.
+BRANCH_NAME_RE = re.compile(r"^[a-zA-Z0-9/_.-]+$")
+
 
 def get_repo_root(session_id: str) -> Path:
     """Path to the cloned repo for this session."""
     return get_settings().repo_path(session_id)
+
+
+def session_meta_path(session_id: str) -> Path:
+    """Path to session metadata file (repo_url, session_branch)."""
+    return get_settings().workspace_root / session_id / "meta.json"
+
+
+def session_branch_name(session_id: str) -> str:
+    """Stable branch name for this session (valid git ref)."""
+    short = (session_id or "").replace("-", "")[:8]
+    if not short:
+        short = "default"
+    name = f"cursor-session-{short}"
+    if not BRANCH_NAME_RE.match(name):
+        name = "cursor-session-default"
+    return name
+
+
+def save_session_meta(session_id: str, repo_url: str, session_branch: str) -> None:
+    """Persist repo_url and session_branch for this session."""
+    path = session_meta_path(session_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    data = {"repo_url": repo_url, "session_branch": session_branch}
+    path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    logger.debug("save_session_meta session_id=%s branch=%s", session_id, session_branch)
+
+
+def load_session_meta(session_id: str) -> dict[str, Any] | None:
+    """Load session meta (repo_url, session_branch). Returns None if missing or invalid."""
+    path = session_meta_path(session_id)
+    if not path.exists():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if isinstance(data, dict) and data.get("repo_url") and data.get("session_branch"):
+            return data
+    except (json.JSONDecodeError, OSError) as e:
+        logger.debug("load_session_meta failed session_id=%s: %s", session_id, e)
+    return None
 
 
 def is_safe_path(resolved: Path, repo_root: Path) -> bool:

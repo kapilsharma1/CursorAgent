@@ -214,6 +214,7 @@ async def coder(state: dict) -> dict:
     system = (
         "You are a code generator. Output ONLY a valid unified diff (e.g. --- a/file\n+++ b/file\n@@ ... @@). "
         "No explanation, no markdown, no code block wrapper. Just the raw diff. "
+        "You MAY create new files: use --- /dev/null and +++ b/path/to/newfile.ext, then @@ -0,0 +1,N @@ with only + lines for the new content. "
         "CRITICAL: The context shows file content with line numbers (N|). Your diff MUST use these EXACT line numbers in the @@ hunk headers. "
         "Example: if the line you are changing is shown as '  2| print(\"x\");' then use @@ -2,1 +2,1 @@ for that hunk, not @@ -1,1 +1,1 @@. "
         "Do not assume line 1 is the first line of code—use the line numbers shown. Match the file exactly; do not add or remove leading/trailing blank lines unless they appear in the context. "

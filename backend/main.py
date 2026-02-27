@@ -12,14 +12,18 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 
 from config import get_settings
-from github import clone_repo
+from github import clone_repo, create_session_branch, normalize_github_url
+from git_ops import commit_and_push
 from graph import get_graph
+from workspace_utils import save_session_meta, session_branch_name
 from indexer import embed_and_index
 from models import (
     ApplyPatchRequest,
     ApplyPatchResponse,
     CloneRepoRequest,
     CloneRepoResponse,
+    CommitAndPushRequest,
+    CommitAndPushResponse,
     FileContentResponse,
     RepoTreeResponse,
     RunAgentRequest,
@@ -106,10 +110,24 @@ async def post_clone_repo(body: CloneRepoRequest, background_tasks: BackgroundTa
     except RuntimeError as e:
         logger.error("Clone runtime error repo_url=%s: %s", body.repo_url, e)
         raise HTTPException(status_code=502, detail=str(e))
+
+    session_branch = session_branch_name(session_id)
+    try:
+        await create_session_branch(repo_path, session_branch)
+    except RuntimeError as e:
+        logger.error("Create session branch failed session_id=%s: %s", session_id, e)
+        raise HTTPException(status_code=502, detail=f"Failed to create session branch: {e}")
+
+    try:
+        normalized_url = normalize_github_url(body.repo_url)
+    except ValueError:
+        normalized_url = body.repo_url.strip()
+    save_session_meta(session_id, normalized_url, session_branch)
+
     tree = build_file_tree(repo_path)
     logger.debug("Clone tree built entries=%s", len(tree))
     background_tasks.add_task(lambda: run_indexing(session_id))
-    logger.info("POST /clone-repo success session_id=%s", session_id)
+    logger.info("POST /clone-repo success session_id=%s branch=%s", session_id, session_branch)
     return CloneRepoResponse(session_id=session_id, tree=tree)
 
 
@@ -222,6 +240,30 @@ async def apply_patch(body: ApplyPatchRequest):
     )
     run_indexing(session_id)
     return ApplyPatchResponse(success=True, message="Patch applied.", updated_files=result)
+
+
+@app.post("/commit-and-push", response_model=CommitAndPushResponse)
+async def post_commit_and_push(body: CommitAndPushRequest):
+    """Commit all changes and push to session branch. Use force=True after non-fast-forward to overwrite remote."""
+    session_id = body.session_id
+    commit_message = body.commit_message or "Updates from Cursor Clone"
+    force = body.force
+    logger.info("POST /commit-and-push session_id=%s force=%s commit_message=%s", session_id, force, commit_message)
+    result = await commit_and_push(session_id, commit_message=commit_message, force=force)
+    logger.info(
+        "commit-and-push result session_id=%s success=%s message=%s error=%s force_required=%s",
+        session_id,
+        result["success"],
+        result.get("message"),
+        result.get("error"),
+        result.get("force_required", False),
+    )
+    return CommitAndPushResponse(
+        success=result["success"],
+        message=result["message"],
+        error=result.get("error"),
+        force_required=result.get("force_required", False),
+    )
 
 
 if __name__ == "__main__":

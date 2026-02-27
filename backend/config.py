@@ -27,6 +27,11 @@ class Settings(BaseSettings):
     # Tavily (web search)
     tavily_api_key: str = ""
 
+    # GitHub push (optional: token for authenticated push; commit author for git config)
+    github_token: str = ""
+    github_commit_username: str = "Cursor Clone"
+    github_commit_email: str = "cursor-clone@local"
+
     # Workspace (relative paths are resolved against the backend directory so clone and apply-patch use the same path)
     workspace_root: Path = Path("./workspace")
 

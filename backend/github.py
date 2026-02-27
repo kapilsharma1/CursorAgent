@@ -89,3 +89,29 @@ async def clone_repo(repo_url: str, dest_path: Path) -> None:
                     f"Repo exceeds max size ({settings.max_repo_bytes} bytes). Aborted."
                 )
     logger.info("clone_repo success dest=%s total_bytes=%s", dest_path, total)
+
+
+async def create_session_branch(repo_path: Path, session_branch: str) -> None:
+    """
+    Create and checkout a new branch in the cloned repo.
+    Branch name must be valid (e.g. cursor-session-xxxxxxxx).
+    """
+    repo_path = Path(repo_path)
+    if not repo_path.exists():
+        raise RuntimeError("Repo path does not exist")
+    logger.info("create_session_branch repo_path=%s branch=%s", repo_path, session_branch)
+    proc = await asyncio.create_subprocess_exec(
+        "git",
+        "checkout",
+        "-b",
+        session_branch,
+        cwd=str(repo_path),
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    stdout, stderr = await proc.communicate()
+    if proc.returncode != 0:
+        err = (stderr or stdout or b"").decode().strip()
+        logger.error("create_session_branch failed returncode=%s stderr=%s", proc.returncode, err[:500])
+        raise RuntimeError(f"git checkout -b failed: {err}")
+    logger.info("create_session_branch success branch=%s", session_branch)

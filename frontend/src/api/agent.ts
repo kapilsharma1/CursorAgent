@@ -160,3 +160,34 @@ export async function applyPatch(sessionId: string, diff: string): Promise<Apply
   }
   return data;
 }
+
+export interface CommitAndPushResponse {
+  success: boolean;
+  message: string;
+  error?: string;
+  force_required?: boolean;
+}
+
+export async function commitAndPush(
+  sessionId: string,
+  commitMessage?: string,
+  force?: boolean
+): Promise<CommitAndPushResponse> {
+  logger.info('API', 'commitAndPush', { sessionId, force });
+  const res = await fetch(`${API_BASE}/commit-and-push`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      session_id: sessionId,
+      commit_message: commitMessage ?? 'Updates from Cursor Clone',
+      force: force === true,
+    }),
+  });
+  const data = await res.json();
+  if (!res.ok) {
+    logger.error('API', 'commitAndPush fetch failed', { sessionId, status: res.status });
+    return { success: false, message: 'Request failed', error: data.detail ?? res.statusText };
+  }
+  logger.info('API', 'commitAndPush result', { sessionId, success: data.success, force_required: data.force_required });
+  return data;
+}

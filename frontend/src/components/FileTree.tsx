@@ -6,6 +6,7 @@ interface FileTreeProps {
   sessionId: string | null;
   onSelectFile: (path: string) => void;
   selectedPath: string | null;
+  treeRefreshKey?: number;
 }
 
 function TreeRow({
@@ -53,7 +54,7 @@ function TreeRow({
   );
 }
 
-export default function FileTree({ sessionId, onSelectFile, selectedPath }: FileTreeProps) {
+export default function FileTree({ sessionId, onSelectFile, selectedPath, treeRefreshKey = 0 }: FileTreeProps) {
   const [tree, setTree] = useState<TreeEntry[]>([]);
   const [loading, setLoading] = useState(false);
 
@@ -69,7 +70,7 @@ export default function FileTree({ sessionId, onSelectFile, selectedPath }: File
       })
       .catch(() => setTree([]))
       .finally(() => setLoading(false));
-  }, [sessionId]);
+  }, [sessionId, treeRefreshKey]);
 
   if (!sessionId) return <div style={{ padding: 12, color: '#888' }}>Clone a repo to see files.</div>;
   if (loading) return <div style={{ padding: 12 }}>Loading tree…</div>;

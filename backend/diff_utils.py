@@ -12,6 +12,56 @@ logger = logging.getLogger(__name__)
 # Blocklisted paths that must not be modified
 BLOCKLIST = {".env", ".env.local", ".env.production", "package-lock.json", "yarn.lock"}
 
+# @@ -start_old[,count_old] +start_new[,count_new] @@
+_HUNK_HEADER_RE = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@.*$")
+
+
+def _normalize_diff_hunk_headers(diff: str) -> str:
+    """
+    Rewrite hunk headers so line counts match the actual hunk body.
+    Fixes 'Hunk is shorter/longer than expected' from unidiff when generators emit wrong counts.
+    """
+    if not diff or not diff.strip():
+        return diff
+    out: list[str] = []
+    lines = diff.splitlines()
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        m = _HUNK_HEADER_RE.match(line)
+        if m:
+            start_old = int(m.group(1))
+            start_new = int(m.group(3))
+            old_count = 0
+            new_count = 0
+            j = i + 1
+            while j < len(lines):
+                rest = lines[j]
+                if rest.startswith("--- ") or rest.startswith("+++ ") or (rest.startswith("@@ ") and _HUNK_HEADER_RE.match(rest)):
+                    break
+                if rest.startswith("-"):
+                    old_count += 1
+                elif rest.startswith("+"):
+                    new_count += 1
+                elif rest.startswith(" "):
+                    old_count += 1
+                    new_count += 1
+                j += 1
+            # Emit corrected hunk header (preserve optional suffix after @@)
+            suffix = line[line.index("@@", 2) + 2 :].strip() if "@@" in line[2:] else ""
+            new_header = f"@@ -{start_old},{old_count} +{start_new},{new_count} @@"
+            if suffix:
+                new_header += " " + suffix
+            out.append(new_header)
+            # Emit hunk body
+            for k in range(i + 1, j):
+                out.append(lines[k])
+            i = j
+            continue
+        out.append(line)
+        i += 1
+    return "\n".join(out)
+
 
 def parse_unified_diff(diff: str) -> list[dict[str, Any]]:
     """
@@ -135,8 +185,9 @@ def apply_patch(diff: str, repo_root: Path) -> dict[str, str] | str:
     except ImportError:
         logger.error("apply_patch unidiff not installed")
         return "unidiff not installed"
+    normalized = _normalize_diff_hunk_headers(diff)
     try:
-        patch = PatchSet(StringIO(diff))
+        patch = PatchSet(StringIO(normalized))
     except Exception as e:
         logger.warning("apply_patch parse failed: %s", e)
         return f"Invalid diff: {e}"

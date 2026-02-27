@@ -62,6 +62,23 @@ class RunAgentRequest(BaseModel):
     search_mode: bool = False
 
 
+class CommitAndPushRequest(BaseModel):
+    """POST /commit-and-push body."""
+
+    session_id: str
+    commit_message: Optional[str] = None
+    force: bool = False
+
+
+class CommitAndPushResponse(BaseModel):
+    """Response after commit-and-push."""
+
+    success: bool
+    message: str
+    error: Optional[str] = None
+    force_required: bool = False
+
+
 # --- Streaming event types (emitted by graph) ---
 
 

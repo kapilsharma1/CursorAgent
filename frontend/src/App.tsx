@@ -18,6 +18,8 @@ export default function App() {
   const [streamEvents, setStreamEvents] = useState<Array<{ type: string; [k: string]: unknown }>>([]);
   const [currentAgent, setCurrentAgent] = useState<string | null>(null);
   const [editorRefreshKey, setEditorRefreshKey] = useState(0);
+  const [hasLocalChanges, setHasLocalChanges] = useState(false);
+  const [treeRefreshKey, setTreeRefreshKey] = useState(0);
 
   function handleRepoLoaded(sid: string, t: TreeEntry[]) {
     logger.info('App', 'handleRepoLoaded', { sessionId: sid, treeEntries: t.length });
@@ -29,11 +31,18 @@ export default function App() {
     setStreamEvents([]);
     setCurrentAgent(null);
     setEditorRefreshKey(0);
+    setHasLocalChanges(false);
   }
 
   function handlePatchApplied(_updatedFiles?: Record<string, string>) {
     setPendingDiff(null);
     setEditorRefreshKey((k) => k + 1);
+    setTreeRefreshKey((k) => k + 1);
+    setHasLocalChanges(true);
+  }
+
+  function handlePushSuccess() {
+    setHasLocalChanges(false);
   }
 
   function handleStreamEvent(event: { type: string; agent?: string; references?: { file: string; line: number }[]; [k: string]: unknown }) {
@@ -52,7 +61,7 @@ export default function App() {
       <AgentStatusBar agent={currentAgent} />
       <div style={{ display: 'flex', flex: 1, minHeight: 0 }}>
         <aside style={{ width: 260, borderRight: '1px solid #333', overflow: 'auto' }}>
-          <FileTree sessionId={sessionId} onSelectFile={setSelectedPath} selectedPath={selectedPath} />
+          <FileTree sessionId={sessionId} onSelectFile={setSelectedPath} selectedPath={selectedPath} treeRefreshKey={treeRefreshKey} />
         </aside>
         <main style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
           <CodeEditor sessionId={sessionId} filePath={selectedPath} references={references} refreshKey={editorRefreshKey} />
@@ -62,6 +71,8 @@ export default function App() {
           <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
             <ChatPanel
               sessionId={sessionId}
+              hasLocalChanges={hasLocalChanges}
+              onPushSuccess={handlePushSuccess}
               onReferences={setReferences}
               onDiff={setPendingDiff}
               onStreamEvent={handleStreamEvent}

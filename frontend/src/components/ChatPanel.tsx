@@ -1,10 +1,12 @@
 import { useRef, useState } from 'react';
 import type { StreamEvent } from '../api/agent';
-import { runAgentStream } from '../api/agent';
+import { commitAndPush, runAgentStream } from '../api/agent';
 import { logger } from '../lib/logger';
 
 interface ChatPanelProps {
   sessionId: string | null;
+  hasLocalChanges: boolean;
+  onPushSuccess?: () => void;
   onReferences: (refs: { file: string; line: number }[]) => void;
   onDiff: (diff: string) => void;
   onStreamEvent?: (event: StreamEvent) => void;
@@ -37,12 +39,45 @@ function WebIcon({ on }: { on: boolean }) {
   );
 }
 
-export default function ChatPanel({ sessionId, onReferences, onDiff, onStreamEvent, onMessageSend }: ChatPanelProps) {
+export default function ChatPanel({
+  sessionId,
+  hasLocalChanges,
+  onPushSuccess,
+  onReferences,
+  onDiff,
+  onStreamEvent,
+  onMessageSend,
+}: ChatPanelProps) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
   const [streaming, setStreaming] = useState(false);
   const [searchMode, setSearchMode] = useState(false);
+  const [pushLoading, setPushLoading] = useState(false);
+  const [pushError, setPushError] = useState<string | null>(null);
+  const [forcePushPrompt, setForcePushPrompt] = useState(false);
   const abortRef = useRef<(() => void) | null>(null);
+
+  async function handlePush(force: boolean) {
+    if (!sessionId || pushLoading) return;
+    setPushError(null);
+    setForcePushPrompt(false);
+    setPushLoading(true);
+    try {
+      const res = await commitAndPush(sessionId, 'Updates from Cursor Clone', force);
+      if (res.success) {
+        onPushSuccess?.();
+      } else if (res.force_required && !force) {
+        setForcePushPrompt(true);
+        setPushError(res.error ?? res.message);
+      } else {
+        setPushError(res.error ?? res.message);
+      }
+    } catch (e) {
+      setPushError((e as Error).message);
+    } finally {
+      setPushLoading(false);
+    }
+  }
 
   function handleSend(e: React.FormEvent) {
     e.preventDefault();
@@ -132,7 +167,7 @@ export default function ChatPanel({ sessionId, onReferences, onDiff, onStreamEve
             resize: 'vertical',
           }}
         />
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 8 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 8, flexWrap: 'wrap' }}>
           <button
             type="button"
             onClick={() => setSearchMode((s) => !s)}
@@ -151,7 +186,50 @@ export default function ChatPanel({ sessionId, onReferences, onDiff, onStreamEve
           <button type="submit" disabled={!sessionId || streaming || !input.trim()}>
             Send
           </button>
+          {sessionId && (
+            <>
+              <button
+                type="button"
+                disabled={!hasLocalChanges || pushLoading}
+                onClick={() => handlePush(false)}
+                title={hasLocalChanges ? 'Commit and push changes to GitHub' : 'Accept a diff first to enable push'}
+                style={{
+                  padding: '6px 10px',
+                  border: '1px solid #444',
+                  borderRadius: 6,
+                  background: hasLocalChanges ? '#1e3a1e' : '#2a2a2a',
+                  cursor: hasLocalChanges && !pushLoading ? 'pointer' : 'not-allowed',
+                  color: hasLocalChanges ? '#9f9' : '#666',
+                }}
+              >
+                {pushLoading ? 'Pushing…' : 'Push changes'}
+              </button>
+              {forcePushPrompt && (
+                <button
+                  type="button"
+                  disabled={pushLoading}
+                  onClick={() => handlePush(true)}
+                  title="Overwrite remote branch (force push)"
+                  style={{
+                    padding: '6px 10px',
+                    border: '1px solid #844',
+                    borderRadius: 6,
+                    background: '#3a1e1e',
+                    cursor: pushLoading ? 'not-allowed' : 'pointer',
+                    color: '#f99',
+                  }}
+                >
+                  Force push
+                </button>
+              )}
+            </>
+          )}
         </div>
+        {pushError && (
+          <div style={{ marginTop: 8, padding: 8, background: '#2a1a1a', borderRadius: 6, color: '#f88', fontSize: 12 }}>
+            {pushError}
+          </div>
+        )}
       </form>
     </div>
   );
