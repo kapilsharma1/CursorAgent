@@ -88,9 +88,6 @@ export default function ChatPanel({
     setMessages((prev) => [...prev, { role: 'user', content: userMsg }]);
     onMessageSend?.();
     setStreaming(true);
-    let assistantContent = '';
-    const assistantId = messages.length + 1;
-
     setMessages((prev) => [...prev, { role: 'assistant', content: '' }]);
 
     abortRef.current = runAgentStream(sessionId, userMsg, (event: StreamEvent) => {

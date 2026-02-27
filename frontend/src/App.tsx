@@ -11,7 +11,7 @@ import AgentStatusBar from './components/AgentStatusBar';
 
 export default function App() {
   const [sessionId, setSessionId] = useState<string | null>(null);
-  const [tree, setTree] = useState<TreeEntry[]>([]);
+  const [, setTree] = useState<TreeEntry[]>([]);
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
   const [references, setReferences] = useState<{ file: string; line: number }[]>([]);
   const [pendingDiff, setPendingDiff] = useState<string | null>(null);
