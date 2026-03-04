@@ -48,7 +48,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(
-    title="Cursor-like AI Assistant API",
+    title="AutoCode By Kapil API",
     description="Clone repos, index with Pinecone, run LangGraph agent with SSE streaming.",
     lifespan=lifespan,
 )

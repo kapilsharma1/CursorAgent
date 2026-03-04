@@ -55,7 +55,7 @@ export default function App() {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
       <header style={{ padding: '8px 16px', borderBottom: '1px solid #333', display: 'flex', alignItems: 'center', gap: 16 }}>
-        <span style={{ fontWeight: 600 }}>Cursor-like AI Assistant</span>
+        <span style={{ fontWeight: 600 }}>AutoCode By Kapil</span>
         <RepoLoader onLoaded={handleRepoLoaded} />
       </header>
       <AgentStatusBar agent={currentAgent} />
